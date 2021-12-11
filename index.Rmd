@@ -46,92 +46,197 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Kinjal Gajera, kg28752
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+The dataset I chose was the 'insurance' which contains information over age, sex, bmi, number of  children, smoker status, region, and insurance charges. It was found through the website, www.kaggle.com. This dataset also includes 1,338 observation for each variable with 2 of them (sex and smoker status) being binary variables, 1 (region) being categorical varibale, and 4 (age, bmi, number of children, and insurance charges) being numerical variables. These variables are interesting to me because I have relatives who have increased insurance charges due to smoker status and bmi. This dataset can be used to determine how accurate the relationships are between all the variables and insurance charges.  
 
 ```{R}
 library(tidyverse)
-# read your datasets in here, e.g., with read_csv()
-
-# if your dataset needs tidying, do so here
-
-# any other code here
+insurance <- read_csv("insurance.csv")
+view(insurance)
 ```
 
 ### Cluster Analysis
 
 ```{R}
 library(cluster)
-# clustering code here
+library(ggplot2)
+library(GGally)
+
+pam_dat<-insurance%>%select(age,bmi,charges)
+sil_width<-vector()
+for(i in 2:10){
+  pam_fit <- pam(pam_dat, k = i)
+  sil_width[i] <- pam_fit$silinfo$avg.width }
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+pam1 <- pam_dat %>% pam(k=2)
+
+pamclust<-pam_dat %>% mutate(cluster=as.factor(pam1$clustering))
+ggpairs(pamclust, mapping = aes(color = cluster))
 ```
 
 Discussion of clustering here
-    
-    
+
+Clustering is a way to partition data into groups. In this case, the data was split into two groups due to the data being evenly distributed as shown distinctively in the scatterplots. There is goodness of fit which can also be seen by two of the scatterplots where there is clear clustering. However, there is one scatterplot that looks completely scattered with no distinguishable cluster which indicates that there is poor goodness of fit. Additionall, the silhouette width suggested that a two cluster solution would be best. 
+
+
 ### Dimensionality Reduction with PCA
 
 ```{R}
-# PCA code here
-```
+pam_nums<- insurance %>% select_if(is.numeric) %>% scale
+pam_pca<-princomp(pam_nums, cor=T)
+summary(pam_pca, loadings=T)
 
+eigval<-pam_pca$sdev^2
+varprop=round(eigval/sum(eigval), 2)
+
+ggplot() + geom_bar(aes(y=varprop, x=1:4), stat="identity")+ xlab("") + scale_x_continuous(breaks=1:10) + geom_path(aes(x=1:4, y=varprop)) + geom_text(aes(x=1:4, y=varprop, label=round(varprop, 2)), vjust=1, col="white")
+
+round(cumsum(eigval)/sum(eigval), 2)
+```
 Discussions of PCA here. 
+
+In this case I decided to keep the first 3 principle components by following the rule of picking components until cumulative proportion of variance is greater than 80 percent. PC1 is a general axis and we see that each are similar in that they are all positive. This indicates the higher someone scores on PC1, the greater the risk for insurance companies. PC2 is a bmi versus children axis. Lower scores on this axis mean lower amount of children but high bmi. PC3 is another general axis. PC4 is an age/bmi versus charges axis. Higher scores on PC4 mean higher age/bmi the lower the charge. In this case, we decided to retain PC1, PC2, and PC3. 
 
 ###  Linear Classifier
 
 ```{R}
-# linear classifier code here
+class_dat <- insurance %>% mutate(smoker = ifelse(smoker=="yes", 1, 0))
+class_dat <- class_dat %>% mutate(sex = ifelse(sex=="female", 1, 0))
+class_dat <- class_dat %>% select_if(is.numeric)
+
+glm(smoker ~ . , data=class_dat, family="binomial") 
+
+fit <- glm(smoker ~ . , data=class_dat, family="binomial")
+probs <- predict(fit, type="response")
+class_diag(probs, class_dat$smoker, positive = 1)
+table(truth = class_dat$smoker, predictions = probs>.5)
 ```
 
 ```{R}
-# cross-validation of linear classifier here
+library(caret)
+
+set.seed(1234)
+k=10
+
+class_dat$smoker = as.factor(class_dat$smoker)
+
+data<-class_dat[sample(nrow(class_dat)),] #randomly order rows
+folds<-cut(seq(1:nrow(class_dat)),breaks=k,labels=F) #create 10 folds
+diags<-NULL
+
+for(i in 1:k) {
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$smoker
+  ## Train model on training set
+  fit<-glm(smoker~.,data=train,family="binomial")
+  probs<-predict(fit,newdata = test,type="response")
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags,class_diag(probs,truth, positive = 1))
+}
+
+summarize_all(diags,mean)
 ```
 
 Discussion here
+
+Looking at our CV model, we see that it has a mean AUC of greater than 0.95. This means that across all 10 folds the 
+model performed exceptional well on average. This is important to know as our non CV model performed exceptionally well 
+as well. However, this is most likely due to the fact that the model has seen the data it is being tested on. In the case 
+of cross validation, the model has to perform on a fold it has not been trained on. Performing well on this unseen fold 
+is an indicator that our model is not overfitting. 
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
-# non-parametric classifier code here
+fit = knn3(smoker ~ . , data=class_dat)
+knnpreds <- predict(fit, class_dat)[,2]
+knnpreds
+table(truth = class_dat$smoker, predictions = knnpreds>.5)
 ```
 
 ```{R}
 # cross-validation of np classifier here
+for(i in 1:k) {
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$smoker
+  ## Train model on training set
+  fit<-knn3(smoker~.,data=train)
+  probs<-predict(fit,newdata = test)[,2]
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags,class_diag(probs,truth, positive =1))
+}
+
+summarize_all(diags,mean)
 ```
 
 Discussion
 
+Looking at our non parametric CV model, we see that it has a mean AUC of greater than 0.95 as well. This means that across all 10 folds, the knn model performed exceptionally well on average. This is important to know as our non CV model performed exceptionally well as well. However, this is most likely due to the fact that the model has seen the data it is being tested on. In the case of cross validation, the model has to perform on a fold it has not been trained on. Performing well on this unseen fold is an indicator that our model is not overfitting. Compared to our cross validated parametric model above, we see that both models have very similar performance.
 
 ### Regression/Numeric Prediction
 
 ```{R}
 # regression model code here
+fit1 <- lm(charges ~., data=class_dat)
+fit1sum <- summary(fit1)
+mean(fit1sum$residuals^2)
 ```
 
 ```{R}
 # cross-validation of regression model here
+data<-class_dat[sample(nrow(class_dat)),] #randomly order rows
+folds<-cut(seq(1:nrow(class_dat)),breaks=k,labels=F) #create 10 folds
+diags<-NULL
+
+for(i in 1:k) {
+  train<-data[folds!=i,] 
+  test<-data[folds==i,]
+  truth<-test$charges
+  ## Train model on training set
+  fit<-lm(charges~.,data=train)
+  probs<-predict(fit,newdata = test)
+  ## Test model on test set (save all k results)
+  diags<-rbind(diags, mean(fit$residuals^2))
+}
+
+mean(diags)
 ```
 
 Discussion
+
+In this case, I used all of my numerical variables denoting qualities about an individual to predict their insurance charges. Given that the charges were high, our mean squared error was also a very large number. However, we can use the results from the non cv model and cv model to determine with reasonable probability whether there was overfitting. Again, in this case, our non cv model performed very well which was expected given the nature of the data. The mean mse was relatively constant across all folds and also reflected a mse similar to the non cv model. Therefore, it is likely the model was not overfitting. 
 
 ### Python 
 
 ```{R}
 library(reticulate)
+use_python("/usr/bin/python3", required = F)
+a <- insurance$bmi
+b <- insurance$charges
+x <- py$a[1:10]
+y <- py$b[1:10]
+plot(a,b)
 ```
 
 ```{python}
-# python code here
+print(r.a[1])
+print(r.b[1])
 ```
 
 Discussion
 
+In the R section, the code was included to show that python can be used in R. Using the "py$" code, python can be used in R. The first 10 observations for bmi and insurance charges were coded to see a small number of data. Using the "r.", it shows that R code can be used in the python section. I printed the first observation for bmw and the first observation for insurance charges. 
+
 ### Concluding Remarks
 
-Include concluding remarks here, if any
+The project was interesting and the data seemed to display certain correlations that I assumed!
 
 
 
